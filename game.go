@@ -71,7 +71,6 @@ func resultCounter(ctx context.Context, responseChan <-chan PlayerResponse, resu
 			return
 		case response := <-responseChan:
 			results[response.Answer]++
-			// Створюємо копію результатів, щоб уникнути конфліктів при одночасному доступі
 			resultCopy := make(map[int]int)
 			for k, v := range results {
 				resultCopy[k] = v
@@ -98,13 +97,31 @@ func main() {
 
 	// Запускаємо гравців
 	numPlayers := 5
-	for i := 1; i <= numPlayers; i++ {
+	playerChans := make([]chan GameRound, numPlayers)
+	for i := 0; i < numPlayers; i++ {
+		playerChans[i] = make(chan GameRound)
 		wg.Add(1)
-		go func(playerID int) {
+		go func(playerID int, playerChan <-chan GameRound) {
 			defer wg.Done()
-			player(ctx, playerID, gameChan, responseChan)
-		}(i)
+			player(ctx, playerID, playerChan, responseChan)
+		}(i+1, playerChans[i])
 	}
+
+	// Фан-аут горутина для розподілу ігрових раундів всім гравцям
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case round := <-gameChan:
+				for _, ch := range playerChans {
+					ch <- round
+				}
+			}
+		}
+	}()
 
 	// Запускаємо лічильник результатів
 	wg.Add(1)
